@@ -1,126 +1,363 @@
 ---
-title: "Copernicus"
+title: "Copernicus for Sanctuaries"
 format:
   html:
+    toc: true
     embed-resources: true
+    code-fold: true
+    code-tools: true    
 editor_options: 
   chunk_output_type: console
 ---
 
-## R `reticulate` to Py `copernicusmarine`
+## Setup for copernicusmarine in R
 
 -   [How to sign up for Copernicus Marine Service? | Copernicus Marine Help Center](https://help.marine.copernicus.eu/en/articles/4220332-how-to-sign-up-for-copernicus-marine-service)
--   [How to download data via the Copernicus Marine Toolbox in R? \| Copernicus Marine Help Center](https://help.marine.copernicus.eu/en/articles/8638253-how-to-download-data-via-the-copernicus-marine-toolbox-in-r#h_c480a903fd)
 
-### Fetch bottom temperature (`tob`)
-
-- [Global Ocean Physics Analysis and Forecast | Copernicus Marine Service](https://data.marine.copernicus.eu/product/GLOBAL_ANALYSISFORECAST_PHY_001_024/download?dataset=cmems_mod_glo_phy_anfc_0.083deg_P1M-m_202406)
-
-- Product identifier: `GLOBAL_ANALYSISFORECAST_PHY_001_024`
-- Product name: "Global Ocean Physics Analysis and Forecast"
-  - [manual](https://catalogue.marine.copernicus.eu/documents/PUM/CMEMS-GLO-PUM-001-024.pdf)
-    - **cmems_mod_glo_phy_anfc_0.083deg_P1M-m** which contains the 2D monthly mean fields: sea surface level, bottom pressure, bottom salinity, bottom potential temperature, mixed layer thickness, sea ice albedo, sea ice age, sea ice surface temperature, sea ice
-speed, snow thickness, sea ice thickness, sea ice fraction and sea ice velocities information.
-    - Sea water **_potential_ temperature** at sea floor **`tob`** [°C]
+-   [How to download data via the Copernicus Marine Toolbox in R? \| Copernicus Marine Help Center](https://help.marine.copernicus.eu/en/articles/8638253-how-to-download-data-via-the-copernicus-marine-toolbox-in-r#h_c480a903fd): R `reticulate` to Python `copernicusmarine`.
 
 ```{r}
-# libraries
+#| label: setup
 librarian::shelf(
-  glue, here, reticulate, terra,
+  dplyr, DT, ggplot2, glue, here, jsonlite, leaflet, mapview, ncdf4, readr, reticulate, 
+  sf, stringr, terra, tidyr,
   quiet = T)
+options(readr.show_col_types = F)
 
+sanctuaries_geo <- here("data/sanctuaries.geojson")
 # copernicusmarine username and password
-user     <- "bbest1"
-pass_txt <- "~/My Drive/private/data.marine.copernicus.eu_bbest1-password.txt"
+# user        <- "bbest1"
+user        <- "tmurray"
+pass_txt    <- "~/My Drive/private/data.marine.copernicus.eu_bbest1-password.txt"
+dir_cm      <- here("data/copernicus")
+results_csv <- here("data/copernicus.csv")
+```
 
+## Sanctuaries
+
+We are extracting Copernicus Marine data from across National Marine Sanctuaries, borrowing polygons from the [noaa-onms/climate-dashboard](https://github.com/noaa-onms/climate-dashboard) (see Github [code](https://noaa-onms.github.io/climate-dashboard/)).
+
+```{r}
+#| label: sanctuaries
+
+if (!file.exists(sanctuaries_geo)){
+  # source: https://github.com/noaa-onms/climate-dashboard/blob/main/data/sanctuaries.rds
+  sanctuaries_rds <- here("../climate-dashboard/data/sanctuaries.rds")
+  readRDS(sanctuaries_rds) |> 
+    filter(nms != "TBNMS") |> # exclude Great Lakes
+    write_sf(sanctuaries_geo, delete_dsn = T)
+}
+
+sanctuaries <- read_sf(sanctuaries_geo)
+sanctuaries |> 
+  st_drop_geometry() |> 
+  datatable()
+mapView(sanctuaries)
+```
+
+
+```{r}
+#| label: set up python env
 # do once: create virtual enviroment and install copernicusmarine Python module
-# virtualenv_create(envname = "CopernicusMarine")
-# virtualenv_install(envname = "CopernicusMarine", packages = c("copernicusmarine"))
-
+virtualenv_create(envname = "CopernicusMarine")
+virtualenv_install(envname = "CopernicusMarine", packages = c("copernicusmarine"))
+# 
 # TODO: check for CopernicusMarine env with copernicusmarine Python module
+```
 
+```{r}
+#| label: cmt
 # use virtualenv and reticulate::import copernicusmarine Python module
 use_virtualenv(virtualenv = "CopernicusMarine", required = TRUE)
 cmt <- import("copernicusmarine")
 
 # login
 pass <- readLines(pass_txt)
-cmt$login(user, pass, skip_if_user_logged_in = T) # py_help(cmt$login)
-# writes to /Users/bbest/.copernicusmarine/.copernicusmarine-credentials
+cmt$login(user, pass) #, skip_if_user_logged_in = T) # py_help(cmt$login)
+# writes to ~/.copernicusmarine/.copernicusmarine-credentials
+```
 
-# describe dataset
-dataset_id <- "cmems_mod_glo_phy_anfc_0.083deg_P1M-m"
-d          <- cmt$describe(contains=list(dataset_id))  # py_help(cmt$describe)
-d
+## Extract Global Ocean Physics Reanalysis
 
-# subset dataset
-dir_data   <- here("data/copernicus")
-s <- cmt$subset(
-  dataset_id            = dataset_id,
-  # dataset_version     = "202309",
-  variables             = list("tob"),
-  minimum_longitude     = -6.93,
-  maximum_longitude     = 2.3,
-  minimum_latitude      = 47.49,
-  maximum_latitude      = 51.65,
-  start_datetime        = "2024-01-01T00:00:00",
-  end_datetime          = "2024-03-01T00:00:00",
-  output_directory      = dir_data,
-  force_download        = T,
-  overwrite_output_data = T
-  # minimum_depth   = 0.4940253794193268,
-  # maximum_depth   = 11.4
-  )
+Product > Dataset > Variable
 
-# show output_filename with parameters embedded
-cat(glue("output_filename (basename): {basename(as.character(s))}"))
+- Product: [Global Ocean Physics Reanalysis | Copernicus Marine Service](https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_PHY_001_030/description)\
+  Product name: Global Ocean Physics Reanalysis\
+  Product identifier: `GLOBAL_MULTIYEAR_PHY_001_030`
 
-# show terra::rast object
-r <- rast(as.character(s))
-print(r)
+- Dataset: `cmems_mod_glo_phy_my_0.083deg_P1M-m` (**monthly**)
+  [Subset Form | Copernicus Marine Service](https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_PHY_001_030/download?dataset=cmems_mod_glo_phy_my_0.083deg_P1M-m_202311)
+  * Dates: `01/01/1993, 00:00`→`06/01/2021, 00:00`
+  * Depths: `0.5 m`→`5727.9 m`
 
-i      <- 1
-cat(glue("index: {i}; layer_index: {names(r)[i]};  time_index: {time(r)[i]}"))
+- Dataset: `cmems_mod_glo_phy_myint_0.083deg_P1M-m` (**Interim, monthly**)\
+  [Subset Form | Copernicus Marine Service](https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_PHY_001_030/download?dataset=cmems_mod_glo_phy_myint_0.083deg_P1M-m_202311)
+  same as above except:
+  * Dates: `07/01/2021, 00:00`→`11/01/2024, 00:00`
 
-# plot interactive map
+Variables, keep:
+
+- `thetao`: Sea water potential temperature [°C]
+- `bottomT`: Sea water potential temperature at sea floor [°C]
+- `so`: Sea water salinity [/ 103]
+- `mlotst`: Ocean mixed layer thickness defined by sigma theta [m]
+
+Variables, skip:
+
+- `siconc`: Sea ice area fraction
+- `sithick`: Sea ice thickness [m]
+- `usi`: Eastward sea ice velocity [m/s]
+- `vsi`: Northward sea ice velocity [m/s]
+- `uo`: Eastward sea water velocity [m/s]
+- `vo`:  Northward sea water velocity [m/s]
+- `zos`: Sea surface height above geoid [m]
+
+### Setup dataset parameters
+
+```{r}
+#| label: datasets
+
+# py_help(cmt$describe)
+# cat_anfc = cmt$describe(
+#   contains             = list("GLOBAL_ANALYSISFORECAST_PHY_001_024"), 
+#   include_datasets     = T,
+#   disable_progress_bar = T)
+# cat_rean = cmt$describe(
+#   contains             = list("GLOBAL_MULTIYEAR_PHY_001_030", "bottomT"), 
+#   include_datasets     = T,
+#   disable_progress_bar = T)
+# View(cat_rean)
+
+datasets <- list(
+  "cmems_mod_glo_phy_my_0.083deg_P1M-m" = list(    # reanalysis monthly
+    vars      = list("thetao", "bottomT", "so", "mlotst"),
+    date_rng  = c("1993-01-01T00:00:00","2021-06-01T00:00:00"),
+    depth_rng =  c(0, 0.5)), # get surface layer only
+  "cmems_mod_glo_phy_myint_0.083deg_P1M-m" = list(  # reanalysis monthly, interim
+    vars      = list("thetao", "bottomT", "so", "mlotst"),
+    date_rng  = c("2021-07-01T00:00:00","2024-12-01T00:00:00"),
+    depth_rng =  c(0, 0.5))) # get surface layer only
+datasets |> 
+  toJSON(auto_unbox = T, pretty=T)
+```
+
+### Iterate over sanctuaries & datasets to subset
+
+```{r}
+#| label: subset
+#| eval: false
+
+for (i in 1:nrow(sanctuaries)){ # i = 1
+
+  d_s <- slice(sanctuaries, i)
+  bb <- d_s |> 
+    st_buffer(9.25*1000) |> # buffer by a pixel width 1/12° ~ 9.25 km at equator
+    st_bbox()
+
+  dir_out <- here(glue("{dir_cm}/{d_s$nms}"))
+  dir.create(dir_out, showWarnings=F, recursive=T)
+  message(glue("{i}/{nrow(sanctuaries)}: {d_s$sanctuary} ({d_s$nms})"))
+  
+  for (j in 1:length(datasets)){ # j=1
+    
+    ds_id <- names(datasets)[j]
+    ds    <- datasets[[j]]
+    message(glue("{j}/{length(datasets)}: {ds_id}"))
+    
+    # py_help( cmt$subset)
+    nc <- cmt$subset(
+      dataset_id            = ds_id,
+      # dataset_version     = "202309",
+      variables             = ds$vars,
+      minimum_longitude     = bb$xmin,
+      maximum_longitude     = bb$xmax,
+      minimum_latitude      = bb$ymin,
+      maximum_latitude      = bb$ymax,
+      start_datetime        = ds$date_rng[1],
+      end_datetime          = ds$date_rng[2],
+      minimum_depth         = ds$depth_rng[1],
+      maximum_depth         = ds$depth_rng[2],
+      output_directory      = dir_out,
+      # force_download        = T,
+      # overwrite_output_data = T
+      overwrite = T
+      # NOTE: should do skip_existing = T for cache?
+    )
+    nc <- as.character(nc)
+    
+    # show output_filename with parameters embedded
+    # cat(glue("output_filename (basename): {basename(nc)}"))
+  }
+}
+```
+
+## Show raster
+
+Grabbing first netcdf file, show full metadata on variables and attributes:
+
+```{r}
+#| label: show_nc
+
+nms = "FKNMS"
+ply <- sanctuaries |> 
+  filter(nms == !!nms)
+nc <- list.files(glue("data/copernicus/{nms}"), full.names = T)[1]
+
+o <- nc_open(nc)
+o
+```
+
+Using `terra::rast()` to read the netcdf file, show first layer:
+
+```{r}
+#| label: show_rast
+
+r <- rast(nc)
+r
+
+i <- 1
+cat(glue("
+  index: {i}
+  name: {names(r)[i]}
+  time: {time(r[[i]])}
+  varname: {varnames(r[[i]])}
+  longname: {longnames(r[[i]])}"))
+```
+
+Plot the raster with the sanctuary:
+
+```{r}
+#| label: plot_rast
+
 plet(
   r[[i]], 
-  main  = glue("Bottom\nTemp. (°C)\n{time(r)[i]}"), 
-  tiles = "Esri.OceanBasemap")
+  # main  = glue("{longnames(r[[i]])}\n{names(r)[i]}\n{time(r[[i]])}"), 
+  main  = glue("{longnames(r[[i]])}\nthetao_depth=0.5\n{time(r[[i]])}"), 
+  tiles = "Esri.OceanBasemap") |> 
+  addPolygons(
+    data        = ply,
+    fillOpacity = 0.2)
 ```
 
-## OLD: `CopernicusMarine` R pkg
-
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(eval = FALSE)
-```
-
-Below is superceded by above, so skipping evaluation of R chunks.
+## Summarize raster to sanctuary
 
 ```{r}
-librarian::shelf(
-  pepijn-devries/CopernicusMarine)
+#| label: extract
+#| eval: false
+
+extract_tbl <- function(r, p, stat = "mean"){
+  terra::extract(r, p, fun = stat, na.rm=T) |>
+    pivot_longer(!ID, names_to = "var_it") |> 
+    mutate(
+      var  = str_replace(var_it, "_[0-9]+$", ""),
+      stat = !!stat,
+      time = time(r)) |> 
+    select(var, time, stat, value)
+}
+
+ncs <- list.files("data/copernicus", "\\.nc$", recursive = T, full.names = T)
+
+for (i in 1:length(ncs)){ # i=9
+  nc    <- ncs[i]
+  nms   <- str_replace(nc, ".*/copernicus/([A-z-]+)/(.+)_multi-vars.*", "\\1")
+  ds_id <- str_replace(nc, ".*/copernicus/([A-z-]+)/(.+)_multi-vars.*", "\\2")
+  message(glue("{i}/{length(ncs)}: nms:{nms}, ds:{ds_id}"))
+  
+  r <- rast(nc)
+  # plet(r[[1]])
+  p <- sanctuaries |> 
+    filter(nms == !!nms)
+  
+  d <- bind_rows(
+    extract_tbl(r, p, "mean"),
+    extract_tbl(r, p, "sd")) |> 
+    mutate(
+      nms     = !!nms,
+      dataset = !!ds_id) |> 
+    relocate(nms, dataset)
+  
+  if (file.exists(results_csv)){
+    read_csv(results_csv) |> 
+      bind_rows(d) |>
+      group_by(nms, dataset, var, time, stat) |>
+      summarize(
+        value   = last(value),
+        .groups = "drop") |>
+      arrange(nms, dataset, var, time, stat) |>
+      write_csv(results_csv)
+  } else {
+    write_csv(d, results_csv)
+  }
+}
 ```
+
 
 ```{r}
-pass_txt = "~/My Drive/private/data.marine.copernicus.eu_bbest1-password.txt"
+#| label: show_ts
 
-options(
-  CopernicusMarine_uid = "bbest1",
-  CopernicusMarine_pwd = readLines(pass_txt))
+results_url <- results_csv |> 
+  str_replace(
+    here(), "https://github.com/noaa-onms/eco-indicators/blob/main")
 
-destination <- tempfile("copernicus_test", fileext = ".nc")
-
-cms_download_subset(
-  destination   = destination,
-  product       = "GLOBAL_ANALYSISFORECAST_PHY_001_024",
-  layer         = "cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m",
-  variable      = "sea_water_velocity",
-  region        = c(-1, 50, 10, 55),
-  timerange     = c("2021-01-01", "2021-01-02"),
-  verticalrange = c(0, -2) )
-
-mydata <- stars::read_stars(destination)
-
-plot(mydata["vo"], col = hcl.colors(100), axes = TRUE)
+# show table
+read_csv(results_csv)
 ```
+
+table of results: [`r basename(results_url)`](`r results_url`)
+
+## Generate timeseries plot per sanctuary 
+
+```{r}
+#| label: plot_ts
+#| eval: false
+
+d <- read_csv(results_csv)
+# table(d$var)
+# bottomT  mlotst  so_depth=0.49402499  thetao_depth=0.49402499 
+#   12288   12288                12288                    12288
+
+plot_var_facets <- function(nms, data){
+  png <- glue("figures/copernicus/{nms}.png")
+  data |> 
+    filter(
+      nms == !!nms) |> 
+    mutate(
+      var = str_replace(var, "_depth=0.49402499", "_0.5m")) |> 
+    pivot_wider(
+      names_from = stat,
+      values_from = value) |> 
+    ggplot(aes(x = time, y = mean, color = var)) + 
+    facet_wrap(~ var) +
+    geom_line() + 
+    geom_ribbon(aes(ymin = mean - sd, ymax = mean + sd, fill = var), color = NA, alpha = 0.2) + 
+    theme(legend.position = "none") + 
+    facet_wrap(~var, scales = "free_y") + 
+    labs(
+      title = nms,
+      x = "Time", 
+      y = "Value")
+  ggsave(png, width = 8, height = 6)
+}
+
+sapply(sanctuaries$nms, plot_var_facets, data = d)
+```
+
+## Show timeseries per sanctuary
+
+::: {.panel-tabset}
+
+```{r}
+#| results: asis
+
+for (nms in sanctuaries$nms) {
+  cat(glue::glue('
+### {nms}
+
+![](figures/copernicus/{nms}.png)
+
+
+'))
+}
+```
+
+:::
