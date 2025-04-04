@@ -17,6 +17,16 @@ editor_options:
 -   [How to download data via the Copernicus Marine Toolbox in R? \| Copernicus Marine Help Center](https://help.marine.copernicus.eu/en/articles/8638253-how-to-download-data-via-the-copernicus-marine-toolbox-in-r#h_c480a903fd): R `reticulate` to Python `copernicusmarine`.
 
 ```{r}
+#| label: set up python env
+# do once: create virtual enviroment and install copernicusmarine Python module
+# virtualenv_create(envname = "CopernicusMarine")
+# virtualenv_install(envname = "CopernicusMarine", packages = c("copernicusmarine"))
+# 
+# TODO: check for CopernicusMarine env with copernicusmarine Python module
+```
+
+## setup R environment
+```{r}
 #| label: setup
 librarian::shelf(
   dplyr, DT, ggplot2, glue, here, jsonlite, leaflet, mapview, ncdf4, readr, reticulate, 
@@ -55,15 +65,6 @@ sanctuaries |>
 mapView(sanctuaries)
 ```
 
-
-```{r}
-#| label: set up python env
-# do once: create virtual enviroment and install copernicusmarine Python module
-virtualenv_create(envname = "CopernicusMarine")
-virtualenv_install(envname = "CopernicusMarine", packages = c("copernicusmarine"))
-# 
-# TODO: check for CopernicusMarine env with copernicusmarine Python module
-```
 
 ```{r}
 #| label: cmt
@@ -188,175 +189,9 @@ for (i in 1:nrow(sanctuaries)){ # i = 1
     # show output_filename with parameters embedded
     # cat(glue("output_filename (basename): {basename(nc)}"))
   }
-}
-```
 
-## Show raster
-
-Grabbing first netcdf file, show full metadata on variables and attributes:
-
-```{r}
-#| label: show_nc
-
-nms = "FKNMS"
-ply <- sanctuaries |> 
-  filter(nms == !!nms)
-nc <- list.files(glue("data/copernicus/{nms}"), full.names = T)[1]
-
-o <- nc_open(nc)
-o
-```
-
-Using `terra::rast()` to read the netcdf file, show first layer:
-
-```{r}
-#| label: show_rast
-
-r <- rast(nc)
-r
-
-i <- 1
-cat(glue("
-  index: {i}
-  name: {names(r)[i]}
-  time: {time(r[[i]])}
-  varname: {varnames(r[[i]])}
-  longname: {longnames(r[[i]])}"))
-```
-
-Plot the raster with the sanctuary:
-
-```{r}
-#| label: plot_rast
-
-plet(
-  r[[i]], 
-  # main  = glue("{longnames(r[[i]])}\n{names(r)[i]}\n{time(r[[i]])}"), 
-  main  = glue("{longnames(r[[i]])}\nthetao_depth=0.5\n{time(r[[i]])}"), 
-  tiles = "Esri.OceanBasemap") |> 
-  addPolygons(
-    data        = ply,
-    fillOpacity = 0.2)
-```
-
-## Summarize raster to sanctuary
-
-```{r}
-#| label: extract
-#| eval: false
-
-extract_tbl <- function(r, p, stat = "mean"){
-  terra::extract(r, p, fun = stat, na.rm=T) |>
-    pivot_longer(!ID, names_to = "var_it") |> 
-    mutate(
-      var  = str_replace(var_it, "_[0-9]+$", ""),
-      stat = !!stat,
-      time = time(r)) |> 
-    select(var, time, stat, value)
-}
-
-ncs <- list.files("data/copernicus", "\\.nc$", recursive = T, full.names = T)
-
-for (i in 1:length(ncs)){ # i=9
-  nc    <- ncs[i]
-  nms   <- str_replace(nc, ".*/copernicus/([A-z-]+)/(.+)_multi-vars.*", "\\1")
-  ds_id <- str_replace(nc, ".*/copernicus/([A-z-]+)/(.+)_multi-vars.*", "\\2")
-  message(glue("{i}/{length(ncs)}: nms:{nms}, ds:{ds_id}"))
-  
-  r <- rast(nc)
-  # plet(r[[1]])
-  p <- sanctuaries |> 
-    filter(nms == !!nms)
-  
-  d <- bind_rows(
-    extract_tbl(r, p, "mean"),
-    extract_tbl(r, p, "sd")) |> 
-    mutate(
-      nms     = !!nms,
-      dataset = !!ds_id) |> 
-    relocate(nms, dataset)
-  
-  if (file.exists(results_csv)){
-    read_csv(results_csv) |> 
-      bind_rows(d) |>
-      group_by(nms, dataset, var, time, stat) |>
-      summarize(
-        value   = last(value),
-        .groups = "drop") |>
-      arrange(nms, dataset, var, time, stat) |>
-      write_csv(results_csv)
-  } else {
-    write_csv(d, results_csv)
-  }
-}
-```
-
-
-```{r}
-#| label: show_ts
-
-results_url <- results_csv |> 
-  str_replace(
-    here(), "https://github.com/noaa-onms/eco-indicators/blob/main")
-
-# show table
-read_csv(results_csv)
-```
-
-table of results: [`r basename(results_url)`](`r results_url`)
-
-## Generate timeseries plot per sanctuary 
-
-```{r}
-#| label: plot_ts
-#| eval: false
-
-d <- read_csv(results_csv)
-# table(d$var)
-# bottomT  mlotst  so_depth=0.49402499  thetao_depth=0.49402499 
-#   12288   12288                12288                    12288
-
-plot_var_facets <- function(nms, data){
-  png <- glue("figures/copernicus/{nms}.png")
-  data |> 
-    filter(
-      nms == !!nms) |> 
-    mutate(
-      var = str_replace(var, "_depth=0.49402499", "_0.5m")) |> 
-    pivot_wider(
-      names_from = stat,
-      values_from = value) |> 
-    ggplot(aes(x = time, y = mean, color = var)) + 
-    facet_wrap(~ var) +
-    geom_line() + 
-    geom_ribbon(aes(ymin = mean - sd, ymax = mean + sd, fill = var), color = NA, alpha = 0.2) + 
-    theme(legend.position = "none") + 
-    facet_wrap(~var, scales = "free_y") + 
-    labs(
-      title = nms,
-      x = "Time", 
-      y = "Value")
-  ggsave(png, width = 8, height = 6)
-}
-
-sapply(sanctuaries$nms, plot_var_facets, data = d)
-```
-
-## Show timeseries per sanctuary
-
-::: {.panel-tabset}
-
-```{r}
-#| results: asis
-
-for (nms in sanctuaries$nms) {
-  cat(glue::glue('
-### {nms}
-
-![](figures/copernicus/{nms}.png)
-
-
-'))
+  # TODO: create .csv-based dir structure to match ERDDAP data outputs
+  #       so data can be graphed together.
 }
 ```
 
